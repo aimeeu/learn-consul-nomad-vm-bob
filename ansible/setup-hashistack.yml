@@ -1,0 +1,250 @@
+---
+# Ansible Playbook: HashiStack Setup
+# Converts setup.sh to Ansible for installing Consul, Nomad, Vault, and dependencies
+# Usage: ansible-playbook -i inventory.ini setup-hashistack.yml
+
+- name: Setup HashiStack Infrastructure
+  hosts: all
+  become: yes
+  vars:
+    consul_version: "1.22.5"
+    vault_version: "1.21.3"
+    nomad_version: "2.0.1"
+    consul_template_version: "0.41.4"
+    consul_template_config_dir: "/etc/consul-template.d"
+    consul_template_dir: "/opt/consul-template"
+    cloud_env: "aws"  # Options: aws, gce, azure
+    
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    
+  tasks:
+    # =========================================================================
+    # System Prerequisites
+    # =========================================================================
+    
+    - name: Install software-properties-common (AWS)
+      apt:
+        name: software-properties-common
+        state: present
+        update_cache: yes
+      when: cloud_env == "aws"
+      
+    - name: Update apt cache and install software-properties-common (GCE)
+      apt:
+        name: software-properties-common
+        state: present
+        update_cache: yes
+      when: cloud_env == "gce"
+      
+    - name: Install software-properties-common (Azure)
+      apt:
+        name: software-properties-common
+        state: present
+        update_cache: yes
+      when: cloud_env == "azure"
+      
+    - name: Add universe repository
+      apt_repository:
+        repo: "{{ item }}"
+        state: present
+      loop:
+        - "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
+        - "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }}-updates universe"
+      
+    - name: Update apt cache after adding universe
+      apt:
+        update_cache: yes
+        
+    - name: Install base utilities
+      apt:
+        name:
+          - unzip
+          - tree
+          - redis-tools
+          - jq
+          - curl
+          - tmux
+          - nano
+        state: present
+        
+    - name: Clean apt cache
+      apt:
+        autoclean: yes
+        autoremove: yes
+        
+    # =========================================================================
+    # Firewall Configuration
+    # =========================================================================
+    
+    - name: Disable UFW firewall
+      ufw:
+        state: disabled
+      ignore_errors: yes
+      
+    # =========================================================================
+    # Consul Template Directories
+    # =========================================================================
+    
+    - name: Create Consul Template configuration directory
+      file:
+        path: "{{ consul_template_config_dir }}"
+        state: directory
+        mode: '0755'
+        
+    - name: Create Consul Template directory
+      file:
+        path: "{{ consul_template_dir }}"
+        state: directory
+        mode: '0755'
+        
+    # =========================================================================
+    # Docker Installation
+    # =========================================================================
+    
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - gnupg2
+        state: present
+        
+    - name: Get distribution name
+      shell: lsb_release -si | tr '[:upper:]' '[:lower:]'
+      register: distro_name
+      changed_when: false
+      
+    - name: Get distribution codename
+      shell: lsb_release -cs
+      register: distro_codename
+      changed_when: false
+      
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/debian/gpg
+        state: present
+        
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/{{ distro_name.stdout }} {{ distro_codename.stdout }} stable"
+        state: present
+        
+    - name: Update apt cache after adding Docker repo
+      apt:
+        update_cache: yes
+        
+    - name: Install Docker CE
+      apt:
+        name: docker-ce
+        state: present
+        
+    - name: Ensure Docker service is started and enabled
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+        
+    # =========================================================================
+    # Java Installation
+    # =========================================================================
+    
+    - name: Add OpenJDK PPA repository
+      apt_repository:
+        repo: ppa:openjdk-r/ppa
+        state: present
+        
+    - name: Update apt cache after adding OpenJDK PPA
+      apt:
+        update_cache: yes
+        
+    - name: Install OpenJDK 8
+      apt:
+        name: openjdk-8-jdk
+        state: present
+        
+    - name: Get JAVA_HOME path
+      shell: readlink -f /usr/bin/java | sed "s:bin/java::"
+      register: java_home_path
+      changed_when: false
+      
+    - name: Set JAVA_HOME environment variable
+      lineinfile:
+        path: /etc/environment
+        regexp: '^JAVA_HOME='
+        line: "JAVA_HOME={{ java_home_path.stdout }}"
+        state: present
+        
+    # =========================================================================
+    # HashiCorp Repository Setup
+    # =========================================================================
+    
+    - name: Download HashiCorp GPG key
+      get_url:
+        url: https://apt.releases.hashicorp.com/gpg
+        dest: /tmp/hashicorp.gpg
+        mode: '0644'
+        
+    - name: Add HashiCorp GPG key to keyring
+      shell: |
+        gpg --dearmor < /tmp/hashicorp.gpg > /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        
+    - name: Add HashiCorp APT repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com {{ distro_codename.stdout }} main"
+        state: present
+        filename: hashicorp
+        
+    - name: Update apt cache after adding HashiCorp repo
+      apt:
+        update_cache: yes
+        
+    # =========================================================================
+    # HashiStack Installation
+    # =========================================================================
+    
+    - name: Install HashiStack packages
+      apt:
+        name:
+          - "consul={{ consul_version }}*"
+          - "nomad={{ nomad_version }}*"
+          - "vault={{ vault_version }}*"
+          - "consul-template={{ consul_template_version }}*"
+        state: present
+        allow_downgrade: yes
+        
+    # =========================================================================
+    # Verification
+    # =========================================================================
+    
+    - name: Verify Consul installation
+      command: consul version
+      register: consul_version_output
+      changed_when: false
+      
+    - name: Verify Nomad installation
+      command: nomad version
+      register: nomad_version_output
+      changed_when: false
+      
+    - name: Verify Vault installation
+      command: vault version
+      register: vault_version_output
+      changed_when: false
+      
+    - name: Verify Consul Template installation
+      command: consul-template -version
+      register: consul_template_version_output
+      changed_when: false
+      
+    - name: Display installed versions
+      debug:
+        msg:
+          - "Consul: {{ consul_version_output.stdout }}"
+          - "Nomad: {{ nomad_version_output.stdout }}"
+          - "Vault: {{ vault_version_output.stdout }}"
+          - "Consul Template: {{ consul_template_version_output.stdout }}"
+
+# Made with Bob

@@ -1,0 +1,108 @@
+# -----------------------------+
+# BASE CONFIG                  |
+# -----------------------------+
+
+# Domain and Datacenter
+datacenter = "{{ datacenter }}"
+domain = "{{ domain }}"
+
+# Node name
+node_name = "{{ inventory_hostname }}"
+
+# Data Persistence
+data_dir = "/opt/consul/"
+
+# Logging
+log_level = "INFO"
+
+## Disable script checks
+enable_script_checks = false
+
+## Enable local script checks
+enable_local_script_checks = true
+
+## Automatically reload reloadable configuration
+auto_reload_config = true
+
+# -----------------------------+
+# CLIENT CONFIG                |
+# -----------------------------+
+
+server = false
+
+# -----------------------------+
+# NETWORKING CONFIG            |
+# -----------------------------+
+
+# Enable service mesh
+connect {
+  enabled = true
+}
+
+# Addresses and ports
+client_addr = "127.0.0.1 {{ docker_bridge_ip_address }}"
+bind_addr   = "{{ ip_address }}"
+
+# Ports
+ports {
+  http      = 8500
+  https     = -1
+  grpc      = 8502
+  grpc_tls  = -1
+  dns       = 8600
+}
+
+# Join other Consul agents
+retry_join = [ "{{ consul_retry_join }}" ]
+
+# DNS recursors
+recursors = ["1.1.1.1"]
+
+# -----------------------------+
+# MONITORING CONFIG            |
+# -----------------------------+
+
+
+# -----------------------------+
+# SECURITY CONFIG              |
+# -----------------------------+
+
+# Gossip Encryption              
+# -----------------------------
+
+encrypt = "{{ consul_encryption_key }}"
+
+# TLS Encryption              
+# -----------------------------
+
+tls {
+  https {
+    ca_file   = "{{ consul_config_dir }}/consul-agent-ca.pem"
+    verify_incoming        = false
+    verify_outgoing        = true
+  }
+  internal_rpc {
+    ca_file   = "{{ consul_config_dir }}/consul-agent-ca.pem"
+    verify_incoming        = true
+    verify_outgoing        = true
+    verify_server_hostname = true
+  }
+}
+
+auto_encrypt {
+  tls = true
+}
+
+# ACL Configuration              
+# -----------------------------
+
+acl {
+  enabled        = true
+  default_policy = "deny"
+  enable_token_persistence = true
+
+  tokens {
+    agent  = "{{ consul_agent_token }}"
+    default  = "{{ consul_default_token }}"
+  }
+}

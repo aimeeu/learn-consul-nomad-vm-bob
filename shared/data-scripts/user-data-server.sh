@@ -100,6 +100,10 @@ CONSUL_PUBLIC_BIND_ADDR="$PUBLIC_IP_ADDRESS"
 
 NOMAD_MANAGEMENT_TOKEN="${nomad_management_token}"
 
+# Configuration file destinations
+_JWT_FILE="${jwt_file}"
+_POLICY_NOMAD_TASKS="${nomad_tasks_policy_file}"
+
 # Configure and start Consul
 #-------------------------------------------------------------------------------
 
@@ -246,3 +250,98 @@ done
 
 ## todo instead of sleeping check on status https://developer.hashicorp.com/nomad/api-docs/status
 sleep 30
+
+#------------------------
+# Create Consul-Nomad ACL workload identity integration because
+#  nomad.hcl consul config block contains service_identity and task_identity
+# https://developer.hashicorp.com/nomad/docs/secure/acl/consul#configuring-consul-authentication
+# Moved from 04.api-gateway.config.sh
+# ------------------------
+# @TODO the problem here is that this script runs before Terraform outputs.tf.
+# The 04.api-gateway.config.sh script sources the datacenter.env file to get the env variables.
+# Also not sure why JWKSCACert is used since that's not in the docs, so removed
+
+
+
+## -----------------------------------------------------------------------------
+## Configure Consul and Nomad ACL integration
+## -----------------------------------------------------------------------------
+
+echo -e "Create Consul auth-method 'nomad-workloads'"
+
+tee ${_JWT_FILE} > /dev/null << EOF
+{
+  "JWKSURL": "https://127.0.0.1:4646/.well-known/jwks.json",
+  "JWTSupportedAlgs": ["RS256"],
+  "BoundAudiences": ["consul.io"],
+  "ClaimMappings": {
+    "nomad_namespace": "nomad_namespace",
+    "nomad_job_id": "nomad_job_id",
+    "nomad_task": "nomad_task",
+    "nomad_service": "nomad_service"
+  }
+}
+EOF
+
+# This auth method creates an endpoint for generating Consul ACL tokens 
+#  from Nomad workload identities.
+consul acl auth-method create \
+            -name 'nomad-workloads' \
+            -type 'jwt' \
+            -description 'JWT auth-method for Nomad services and workloads' \
+            -config "@${_JWT_FILE}"
+
+# -----------------------------------------------------------------------------
+# Create workload identity artifacts for HashiCups, which runs in the default namespace
+# https://developer.hashicorp.com/nomad/tutorials/integrate-consul/consul-acl#configure-consul-for-tasks-workload-identities
+# https://developer.hashicorp.com/nomad/commands/setup/consul
+# -----------------------------------------------------------------------------
+
+echo -e "Create Consul binding-rule for Nomad services not in ingress namespace"
+
+# Binding rule for Nomad services running in the 'default' namespace
+consul acl binding-rule create \
+           -method 'nomad-workloads' \
+           -description 'Binding rule for Nomad services authenticated using a workload identity' \
+           -bind-type 'service' \
+           -bind-name '${value.nomad_service}' \
+           -selector '"nomad_service" in value'
+
+echo -e "Create Consul binding-rule for Nomad tasks not in ingress namespace."
+
+# Bind rule for Nomad tasks running in the 'default' namespace
+consul acl binding-rule create \
+           -method 'nomad-workloads' \
+           -description 'Binding rule for Nomad tasks authenticated using a workload identity' \
+           -bind-type 'role' \
+           -bind-name 'nomad-${value.nomad_namespace}-tasks' \
+           -selector '"nomad_service" not in value'
+
+echo -e "$Create Consul ACL policy 'policy-nomad-tasks' for Nomad tasks."
+
+tee ${_POLICY_NOMAD_TASKS} > /dev/null << EOF
+key_prefix "" {
+  policy = "read"
+}
+
+node_prefix "" {
+  policy = "read"
+}
+
+service_prefix "" {
+  policy = "write"
+}
+EOF
+
+consul acl policy create \
+            -name 'policy-nomad-tasks' \
+            -description 'ACL policy used by Nomad tasks' \
+            -rules @${_POLICY_NOMAD_TASKS}
+
+echo -e "Create Consul ACL role 'nomad-default-tasks' for Nomad tasks."
+
+consul acl role create \
+           -name 'nomad-default-tasks' \
+           -description 'ACL role for Nomad tasks in the default Nomad namespace' \
+           -policy-name 'policy-nomad-tasks'
+
