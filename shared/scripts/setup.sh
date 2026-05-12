@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ## This script is used by Packer to generate the AMI
-## It installs prepequisites and the HashiStack tools
+## It installs prerequisites and the HashiStack tools
 
 set -e
 
@@ -13,11 +13,10 @@ pushd /ops
 # CONFIGDIR=/ops/shared/config
 CONFIGDIR=/ops/shared/conf
 
-CONSULVERSION=1.19.0
-ENVOYVERSION=1.29.x
-VAULTVERSION=1.17.3
-NOMADVERSION=1.8.3
-CONSULTEMPLATEVERSION=0.39.1
+CONSULVERSION=1.22.5
+VAULTVERSION=1.21.3
+NOMADVERSION=2.0.1
+CONSULTEMPLATEVERSION=0.41.4
 
 CONSULTEMPLATECONFIGDIR=/etc/consul-template.d
 CONSULTEMPLATEDIR=/opt/consul-template
@@ -42,7 +41,7 @@ case $CLOUD_ENV in
 esac
 
 sudo add-apt-repository universe && sudo apt-get update
-sudo apt-get install -y unzip tree redis-tools jq curl tmux
+sudo apt-get install -y unzip tree redis-tools jq curl tmux nano
 sudo apt-get clean
 
 
@@ -87,8 +86,5 @@ sudo apt-get update && sudo apt-get -y install \
 	vault=$VAULTVERSION* \
 	consul-template=$CONSULTEMPLATEVERSION*
 
- ## todo  Install Envoy on the AMI
-
- ## todo  Check other base packages to be installed
 
 popd

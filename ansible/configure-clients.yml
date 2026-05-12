@@ -1,0 +1,290 @@
+---
+# Ansible Playbook: Configure HashiStack Clients
+# Converts user-data-client.sh to Ansible for configuring Consul and Nomad clients
+# Usage: ansible-playbook -i inventory.ini configure-clients.yml
+
+- name: Configure HashiStack Clients
+  hosts: clients,public_clients
+  become: yes
+  vars:
+    # Cluster configuration
+    datacenter: "dc1"
+    domain: "global"
+    cloud_env: "aws"
+    
+    # Directory paths
+    config_dir: "/ops/shared/conf"
+    consul_config_dir: "/etc/consul.d"
+    vault_config_dir: "/etc/vault.d"
+    nomad_config_dir: "/etc/nomad.d"
+    consul_template_config_dir: "/etc/consul-template.d"
+    
+    # CNI Plugin versions
+    cni_plugin_version: "v1.9.0"
+    consul_cni_plugin_version: "1.9.5"
+    
+    # These should be provided via extra-vars or vault
+    consul_encryption_key: "{{ lookup('env', 'CONSUL_ENCRYPTION_KEY') }}"
+    consul_agent_token: "{{ lookup('env', 'CONSUL_AGENT_TOKEN') }}"
+    consul_default_token: "{{ lookup('env', 'CONSUL_DEFAULT_TOKEN') }}"
+    nomad_agent_token: "{{ lookup('env', 'NOMAD_AGENT_TOKEN') }}"
+    
+    # Certificate variables (base64 encoded, gzipped)
+    ca_certificate: "{{ lookup('env', 'CA_CERTIFICATE') }}"
+    agent_certificate: "{{ lookup('env', 'AGENT_CERTIFICATE') }}"
+    agent_key: "{{ lookup('env', 'AGENT_KEY') }}"
+    
+    # Node metadata (can be overridden per host)
+    nomad_agent_meta: ""
+    
+  tasks:
+    # =========================================================================
+    # Setup and Prerequisites
+    # =========================================================================
+    
+    - name: Create log directory
+      file:
+        path: /var/log
+        state: directory
+        mode: '0755'
+        
+    - name: Wait for network to be ready
+      wait_for:
+        timeout: 15
+      delegate_to: localhost
+      
+    # =========================================================================
+    # Retrieve and Install Certificates
+    # =========================================================================
+    
+    - name: Decode and decompress CA certificate
+      shell: |
+        echo "{{ ca_certificate }}" | base64 -d | zcat > /tmp/agent-ca.pem
+      when: ca_certificate != ""
+      
+    - name: Decode and decompress agent certificate
+      shell: |
+        echo "{{ agent_certificate }}" | base64 -d | zcat > /tmp/agent.pem
+      when: agent_certificate != ""
+      
+    - name: Decode and decompress agent key
+      shell: |
+        echo "{{ agent_key }}" | base64 -d | zcat > /tmp/agent-key.pem
+      when: agent_key != ""
+      
+    - name: Copy CA certificate to Consul config directory
+      copy:
+        src: /tmp/agent-ca.pem
+        dest: "{{ consul_config_dir }}/consul-agent-ca.pem"
+        remote_src: yes
+        mode: '0600'
+      when: ca_certificate != ""
+      
+    - name: Copy certificates to Nomad config directory
+      copy:
+        src: "/tmp/{{ item.src }}"
+        dest: "{{ nomad_config_dir }}/{{ item.dest }}"
+        remote_src: yes
+        mode: '0600'
+      loop:
+        - { src: 'agent-ca.pem', dest: 'nomad-agent-ca.pem' }
+        - { src: 'agent.pem', dest: 'nomad-agent.pem' }
+        - { src: 'agent-key.pem', dest: 'nomad-agent-key.pem' }
+      when: ca_certificate != ""
+      
+    # =========================================================================
+    # Gather IP Addresses
+    # =========================================================================
+    
+    - name: Get Docker bridge IP address
+      shell: ip -brief addr show docker0 | awk '{print $3}' | awk -F/ '{print $1}'
+      register: docker_bridge_ip
+      changed_when: false
+      
+    - name: Get instance IP address (AWS)
+      block:
+        - name: Get AWS metadata token
+          uri:
+            url: http://instance-data/latest/api/token
+            method: PUT
+            headers:
+              X-aws-ec2-metadata-token-ttl-seconds: "21600"
+            return_content: yes
+          register: aws_token
+          
+        - name: Get private IP from AWS metadata
+          uri:
+            url: http://instance-data/latest/meta-data/local-ipv4
+            headers:
+              X-aws-ec2-metadata-token: "{{ aws_token.content }}"
+            return_content: yes
+          register: private_ip
+      when: cloud_env == "aws"
+      
+    - name: Set IP address facts
+      set_fact:
+        ip_address: "{{ private_ip.content if cloud_env == 'aws' else ansible_default_ipv4.address }}"
+        docker_bridge_ip_address: "{{ docker_bridge_ip.stdout }}"
+        
+    # =========================================================================
+    # Install Nomad Prerequisites (CNI Plugins)
+    # =========================================================================
+    
+    - name: Detect system architecture
+      shell: "[ $(uname -m) = aarch64 ] && echo arm64 || echo amd64"
+      register: system_arch
+      changed_when: false
+      
+    - name: Set architecture fact
+      set_fact:
+        arch_cni: "{{ system_arch.stdout }}"
+        
+    - name: Download CNI plugins
+      get_url:
+        url: "https://github.com/containernetworking/plugins/releases/download/{{ cni_plugin_version }}/cni-plugins-linux-{{ arch_cni }}-{{ cni_plugin_version }}.tgz"
+        dest: /tmp/cni-plugins.tgz
+        mode: '0644'
+        
+    - name: Create CNI bin directory
+      file:
+        path: /opt/cni/bin
+        state: directory
+        mode: '0755'
+        
+    - name: Extract CNI plugins
+      unarchive:
+        src: /tmp/cni-plugins.tgz
+        dest: /opt/cni/bin
+        remote_src: yes
+        
+    - name: Download Consul CNI plugin
+      get_url:
+        url: "https://releases.hashicorp.com/consul-cni/{{ consul_cni_plugin_version }}/consul-cni_{{ consul_cni_plugin_version }}_linux_{{ arch_cni }}.zip"
+        dest: /tmp/consul-cni.zip
+        mode: '0644'
+        
+    - name: Extract Consul CNI plugin
+      unarchive:
+        src: /tmp/consul-cni.zip
+        dest: /opt/cni/bin
+        remote_src: yes
+        exclude:
+          - LICENSE.txt
+        
+    # =========================================================================
+    # Configure and Start Consul Client
+    # =========================================================================
+    
+    - name: Generate retry_join string for Consul
+      set_fact:
+        consul_retry_join: "provider=aws tag_key=ConsulJoinTag tag_value=auto-join"
+      when: cloud_env == "aws"
+      
+    - name: Deploy Consul client configuration from template
+      template:
+        src: templates/consul-client.hcl.j2
+        dest: "{{ consul_config_dir }}/consul.hcl"
+        mode: '0640'
+        
+    - name: Enable Consul service
+      systemd:
+        name: consul
+        enabled: yes
+        
+    - name: Start Consul service
+      systemd:
+        name: consul
+        state: started
+        
+    - name: Wait for Consul to be ready
+      wait_for:
+        port: 8500
+        delay: 5
+        timeout: 60
+        
+    # =========================================================================
+    # Configure and Start Nomad Client
+    # =========================================================================
+    
+    - name: Deploy Nomad client configuration from template
+      template:
+        src: templates/nomad-client.hcl.j2
+        dest: "{{ nomad_config_dir }}/nomad.hcl"
+        mode: '0640'
+        
+    - name: Enable Nomad service
+      systemd:
+        name: nomad
+        enabled: yes
+        
+    - name: Start Nomad service
+      systemd:
+        name: nomad
+        state: started
+        
+    - name: Wait for Nomad to be ready
+      wait_for:
+        port: 4646
+        delay: 5
+        timeout: 60
+        
+    # =========================================================================
+    # Configure Consul Template
+    # =========================================================================
+    
+    - name: Deploy Consul Template configuration
+      copy:
+        src: "{{ config_dir }}/agent-config-consul_template.hcl"
+        dest: "{{ consul_template_config_dir }}/consul-template.hcl"
+        remote_src: yes
+        mode: '0640'
+        
+    - name: Deploy Consul Template systemd service
+      copy:
+        src: "{{ config_dir }}/systemd-service-consul_template.service"
+        dest: "/etc/systemd/system/consul-template.service"
+        remote_src: yes
+        mode: '0644'
+        
+    # =========================================================================
+    # Configure DNS
+    # =========================================================================
+    
+    - name: Add hostname to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.1 {{ inventory_hostname }}"
+        
+    - name: Create systemd-resolved config directory
+      file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: '0755'
+        
+    - name: Deploy systemd-resolved Consul DNS configuration
+      template:
+        src: templates/systemd-resolved-consul.conf.j2
+        dest: /etc/systemd/resolved.conf.d/consul.conf
+        mode: '0644'
+        
+    - name: Restart systemd-resolved
+      systemd:
+        name: systemd-resolved
+        state: restarted
+        
+    # =========================================================================
+    # Cleanup temporary files
+    # =========================================================================
+    
+    - name: Remove temporary certificate files
+      file:
+        path: "/tmp/{{ item }}"
+        state: absent
+      loop:
+        - agent-ca.pem
+        - agent.pem
+        - agent-key.pem
+        - cni-plugins.tgz
+        - consul-cni.zip
+
+# Made with Bob
