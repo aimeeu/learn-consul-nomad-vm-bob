@@ -1,0 +1,166 @@
+---
+- name: Configure Consul service intentions
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+
+  vars:
+    intent_db_file: /tmp/intention-db.hcl
+    intent_prod_api_file: /tmp/intention-product_api.hcl
+    intent_pay_api_file: /tmp/intention-payments_api.hcl
+    intent_pub_api_file: /tmp/intention-public_api.hcl
+    intent_fe_file: /tmp/intention-frontend.hcl
+    intent_nginx_file: /tmp/intention-nginx.hcl
+
+  tasks:
+    - name: Remove existing service intentions
+      block:
+        - name: Delete database intentions
+          ansible.builtin.command:
+            argv: [consul, config, delete, -kind, service-intentions, -name, database]
+          failed_when: false
+          changed_when: false
+        - name: Delete product-api intentions
+          ansible.builtin.command:
+            argv: [consul, config, delete, -kind, service-intentions, -name, product-api]
+          failed_when: false
+          changed_when: false
+        - name: Delete payments-api intentions
+          ansible.builtin.command:
+            argv: [consul, config, delete, -kind, service-intentions, -name, payments-api]
+          failed_when: false
+          changed_when: false
+        - name: Delete public-api intentions
+          ansible.builtin.command:
+            argv: [consul, config, delete, -kind, service-intentions, -name, public-api]
+          failed_when: false
+          changed_when: false
+        - name: Delete frontend intentions
+          ansible.builtin.command:
+            argv: [consul, config, delete, -kind, service-intentions, -name, frontend]
+          failed_when: false
+          changed_when: false
+        - name: Delete nginx intentions
+          ansible.builtin.command:
+            argv: [consul, config, delete, -kind, service-intentions, -name, nginx]
+          failed_when: false
+          changed_when: false
+
+    - name: End play when clean_only is set
+      ansible.builtin.meta: end_play
+      when: clean_only | default(false) | bool
+
+    - name: Create database intention config
+      ansible.builtin.copy:
+        dest: "{{ intent_db_file }}"
+        mode: "0600"
+        content: |
+          Kind = "service-intentions"
+          Name = "database"
+          Sources = [
+            {
+              Name   = "product-api"
+              Action = "allow"
+            }
+          ]
+
+    - name: Create product-api intention config
+      ansible.builtin.copy:
+        dest: "{{ intent_prod_api_file }}"
+        mode: "0600"
+        content: |
+          Kind = "service-intentions"
+          Name = "product-api"
+          Sources = [
+            {
+              Name   = "public-api"
+              Action = "allow"
+            }
+          ]
+
+    - name: Create payments-api intention config
+      ansible.builtin.copy:
+        dest: "{{ intent_pay_api_file }}"
+        mode: "0600"
+        content: |
+          Kind = "service-intentions"
+          Name = "payments-api"
+          Sources = [
+            {
+              Name   = "public-api"
+              Action = "allow"
+            }
+          ]
+
+    - name: Create public-api intention config
+      ansible.builtin.copy:
+        dest: "{{ intent_pub_api_file }}"
+        mode: "0600"
+        content: |
+          Kind = "service-intentions"
+          Name = "public-api"
+          Sources = [
+            {
+              Name   = "nginx"
+              Action = "allow"
+            }
+          ]
+
+    - name: Create frontend intention config
+      ansible.builtin.copy:
+        dest: "{{ intent_fe_file }}"
+        mode: "0600"
+        content: |
+          Kind = "service-intentions"
+          Name = "frontend"
+          Sources = [
+            {
+              Name   = "nginx"
+              Action = "allow"
+            }
+          ]
+
+    - name: Create nginx intention config
+      ansible.builtin.copy:
+        dest: "{{ intent_nginx_file }}"
+        mode: "0600"
+        content: |
+          Kind = "service-intentions"
+          Name = "nginx"
+          Sources = [
+            {
+              Name   = "api-gateway"
+              Action = "allow"
+            }
+          ]
+
+    - name: Write database intention
+      ansible.builtin.command:
+        argv: [consul, config, write, "{{ intent_db_file }}"]
+      changed_when: true
+
+    - name: Write product-api intention
+      ansible.builtin.command:
+        argv: [consul, config, write, "{{ intent_prod_api_file }}"]
+      changed_when: true
+
+    - name: Write payments-api intention
+      ansible.builtin.command:
+        argv: [consul, config, write, "{{ intent_pay_api_file }}"]
+      changed_when: true
+
+    - name: Write public-api intention
+      ansible.builtin.command:
+        argv: [consul, config, write, "{{ intent_pub_api_file }}"]
+      changed_when: true
+
+    - name: Write frontend intention
+      ansible.builtin.command:
+        argv: [consul, config, write, "{{ intent_fe_file }}"]
+      changed_when: true
+
+    - name: Write nginx intention
+      ansible.builtin.command:
+        argv: [consul, config, write, "{{ intent_nginx_file }}"]
+      changed_when: true

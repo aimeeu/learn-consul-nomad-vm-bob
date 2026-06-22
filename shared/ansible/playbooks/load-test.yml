@@ -1,0 +1,46 @@
+---
+- name: Run HashiCups load test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    waves: 5
+    wave_duration: 15
+    workers_multiplier: 7
+    rate_multiplier: 6
+    sleep_time: 7
+
+  tasks:
+    - name: Ensure URL was provided
+      ansible.builtin.assert:
+        that:
+          - load_test_url is defined
+          - load_test_url | length > 0
+        fail_msg: "Set load_test_url when invoking the playbook"
+
+    - name: Run load test waves
+      ansible.builtin.command:
+        argv:
+          - hey
+          - -z
+          - "{{ wave_duration }}s"
+          - -c
+          - "{{ workers_multiplier * item }}"
+          - -q
+          - "{{ rate_multiplier * item }}"
+          - -m
+          - GET
+          - "{{ load_test_url }}"
+      loop: "{{ range(1, waves + 1) | list }}"
+      loop_control:
+        label: "wave {{ item }}"
+      changed_when: false
+
+    - name: Pause between waves
+      ansible.builtin.pause:
+        seconds: "{{ sleep_time }}"
+      loop: "{{ range(1, waves) | list }}"
+      loop_control:
+        label: "pause {{ item }}"
+      changed_when: false

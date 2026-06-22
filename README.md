@@ -28,6 +28,8 @@ There are several jobspec files for the application and each one builds on the p
 1. [Scale the HashiCups application](#7-scale-the-hashicups-application)
 1. [Cleanup jobs and infrastructure](#8-cleanup)
 
+An Ansible-based version of the shell automation now lives under [shared/ansible](shared/ansible/README.md).
+
 ## 1. Build the cluster
 
 Begin by creating the machine image with Packer.

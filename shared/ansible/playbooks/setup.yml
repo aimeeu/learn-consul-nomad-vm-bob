@@ -1,0 +1,83 @@
+---
+- name: Build HashiStack AMI prerequisites
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    config_dir: /ops/shared/conf
+    docker_repo_dist: "{{ ansible_facts.distribution | lower }}"
+    docker_repo_release: "{{ ansible_facts.distribution_release }}"
+
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+  tasks:
+    - name: Install repository helpers
+      ansible.builtin.apt:
+        name: software-properties-common
+        state: present
+        update_cache: true
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name: "{{ setup_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Disable ufw when present
+      ansible.builtin.command:
+        argv: [ufw, disable]
+      register: ufw_disable
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure Consul Template directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ consul_template_config_dir }}"
+        - "{{ consul_template_dir }}"
+
+    - name: Add Docker signing key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/debian/gpg
+        state: present
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/{{ docker_repo_dist }} {{ docker_repo_release }} stable"
+        state: present
+        filename: docker
+
+    - name: Add OpenJDK apt repository
+      ansible.builtin.apt_repository:
+        repo: ppa:openjdk-r/ppa
+        state: present
+        filename: openjdk-r
+
+    - name: Add HashiCorp signing key
+      ansible.builtin.apt_key:
+        url: https://apt.releases.hashicorp.com/gpg
+        state: present
+
+    - name: Add HashiCorp apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb https://apt.releases.hashicorp.com {{ ansible_facts.distribution_release }} main"
+        state: present
+        filename: hashicorp
+
+    - name: Install Docker and Java
+      ansible.builtin.apt:
+        name: "{{ docker_packages + java_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Install HashiCorp packages
+      ansible.builtin.apt:
+        name: "{{ hashistack_packages }}"
+        state: present
+        update_cache: true

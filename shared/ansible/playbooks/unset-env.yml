@@ -1,0 +1,12 @@
+---
+- name: Clear Consul and Nomad environment variables
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Report shell limitation
+      ansible.builtin.debug:
+        msg: >-
+          Ansible cannot unset variables in the parent shell process. Keep using the
+          shell helper when you need to clear the current terminal session.

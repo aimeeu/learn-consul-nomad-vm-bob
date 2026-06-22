@@ -1,0 +1,30 @@
+---
+setup_packages:
+  - unzip
+  - tree
+  - redis-tools
+  - jq
+  - curl
+  - tmux
+  - apt-transport-https
+  - ca-certificates
+  - gnupg2
+
+docker_packages:
+  - docker-ce
+
+java_packages:
+  - openjdk-8-jdk
+
+hashistack_packages:
+  - consul=1.19.0*
+  - nomad=1.8.3*
+  - vault=1.17.3*
+  - consul-template=0.39.1*
+
+consul_template_config_dir: /etc/consul-template.d
+consul_template_dir: /opt/consul-template
+consul_config_dir: /etc/consul.d
+vault_config_dir: /etc/vault.d
+nomad_config_dir: /etc/nomad.d
+resolved_config_dir: /etc/systemd/resolved.conf.d
