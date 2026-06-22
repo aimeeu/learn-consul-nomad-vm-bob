@@ -1,12 +1,12 @@
 ---
-- name: Build HashiStack AMI prerequisites
-  hosts: localhost
-  connection: local
+- name: Install OS prerequisites and HashiStack packages
+  hosts: all
   become: true
   gather_facts: true
 
   vars:
     config_dir: /ops/shared/conf
+    local_conf_dir: "{{ playbook_dir }}/../../conf"
     docker_repo_dist: "{{ ansible_facts.distribution | lower }}"
     docker_repo_release: "{{ ansible_facts.distribution_release }}"
 
@@ -14,6 +14,18 @@
     DEBIAN_FRONTEND: noninteractive
 
   tasks:
+    - name: Ensure /ops/shared/conf directory exists
+      ansible.builtin.file:
+        path: "{{ config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Upload HashiStack configuration templates
+      ansible.builtin.copy:
+        src: "{{ local_conf_dir }}/"
+        dest: "{{ config_dir }}/"
+        mode: preserve
+
     - name: Install repository helpers
       ansible.builtin.apt:
         name: software-properties-common

@@ -36,7 +36,7 @@ variable "region" {
 }
 
 variable "ami" {
-  description = "The AMI to use for the server and client machines. Output from the Packer build process."
+  description = "The base Ubuntu 22.04 AMI ID to use for server and client instances. Find it with: aws ec2 describe-images --owners 099720109477 --filters 'Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*' --query 'sort_by(Images,&CreationDate)[-1].ImageId' --region <region>."
 }
 
 variable "allowlist_ip" {
