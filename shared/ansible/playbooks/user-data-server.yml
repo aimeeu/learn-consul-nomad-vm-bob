@@ -1,51 +1,25 @@
 ---
 - name: Configure a Nomad and Consul server
-  hosts: localhost
-  connection: local
+  hosts: consul_servers
   become: true
   gather_facts: true
 
   vars:
     config_dir: /ops/shared/conf
-    consul_config_dir: /etc/consul.d
-    nomad_config_dir: /etc/nomad.d
-    consul_template_config_dir: /etc/consul-template.d
-    resolved_config_dir: /etc/systemd/resolved.conf.d
-    cloud_env: "{{ cloud_env | default('aws') }}"
 
   tasks:
-    - name: Decode certificate files
-      ansible.builtin.command:
-        argv:
-          - python3
-          - -c
-          - |
-            import base64
-            import gzip
-            import pathlib
-            import sys
-            pathlib.Path(sys.argv[2]).write_bytes(gzip.decompress(base64.b64decode(sys.argv[1])))
-          - "{{ item.content }}"
-          - "{{ item.dest }}"
-      loop:
-        - { dest: /tmp/agent-ca.pem, content: "{{ ca_certificate }}" }
-        - { dest: /tmp/agent.pem, content: "{{ agent_certificate }}" }
-        - { dest: /tmp/agent-key.pem, content: "{{ agent_key }}" }
-      changed_when: true
-
-    - name: Copy TLS materials into agent directories
+    - name: Upload TLS materials to Consul and Nomad directories
       ansible.builtin.copy:
-        remote_src: true
         src: "{{ item.src }}"
         dest: "{{ item.dest }}"
-        mode: "0644"
+        mode: "{{ item.mode }}"
       loop:
-        - { src: /tmp/agent-ca.pem, dest: "{{ consul_config_dir }}/consul-agent-ca.pem" }
-        - { src: /tmp/agent.pem, dest: "{{ consul_config_dir }}/consul-agent.pem" }
-        - { src: /tmp/agent-key.pem, dest: "{{ consul_config_dir }}/consul-agent-key.pem" }
-        - { src: /tmp/agent-ca.pem, dest: "{{ nomad_config_dir }}/nomad-agent-ca.pem" }
-        - { src: /tmp/agent.pem, dest: "{{ nomad_config_dir }}/nomad-agent.pem" }
-        - { src: /tmp/agent-key.pem, dest: "{{ nomad_config_dir }}/nomad-agent-key.pem" }
+        - { src: "{{ ca_cert_src }}", dest: "{{ consul_config_dir }}/consul-agent-ca.pem", mode: "0644" }
+        - { src: "{{ agent_cert_src }}", dest: "{{ consul_config_dir }}/consul-agent.pem", mode: "0644" }
+        - { src: "{{ agent_key_src }}", dest: "{{ consul_config_dir }}/consul-agent-key.pem", mode: "0400" }
+        - { src: "{{ ca_cert_src }}", dest: "{{ nomad_config_dir }}/nomad-agent-ca.pem", mode: "0644" }
+        - { src: "{{ agent_cert_src }}", dest: "{{ nomad_config_dir }}/nomad-agent.pem", mode: "0644" }
+        - { src: "{{ agent_key_src }}", dest: "{{ nomad_config_dir }}/nomad-agent-key.pem", mode: "0400" }
 
     - name: Read docker bridge IP
       ansible.builtin.command:
@@ -53,67 +27,10 @@
       register: docker_bridge
       changed_when: false
 
-    - name: Read cloud metadata IP
-      block:
-        - name: Collect AWS token
-          when: cloud_env == 'aws'
-          ansible.builtin.uri:
-            url: http://instance-data/latest/api/token
-            method: PUT
-            headers:
-              X-aws-ec2-metadata-token-ttl-seconds: "21600"
-            return_content: true
-          register: aws_metadata_token
-
-        - name: Collect AWS private IP
-          when: cloud_env == 'aws'
-          ansible.builtin.uri:
-            url: http://instance-data/latest/meta-data/local-ipv4
-            method: GET
-            headers:
-              X-aws-ec2-metadata-token: "{{ aws_metadata_token.content }}"
-            return_content: true
-          register: aws_private_ip
-
-        - name: Collect AWS public IP
-          when: cloud_env == 'aws'
-          ansible.builtin.uri:
-            url: http://instance-data/latest/meta-data/public-ipv4
-            method: GET
-            headers:
-              X-aws-ec2-metadata-token: "{{ aws_metadata_token.content }}"
-            return_content: true
-          register: aws_public_ip
-
-        - name: Collect GCE private IP
-          when: cloud_env == 'gce'
-          ansible.builtin.uri:
-            url: http://metadata/computeMetadata/v1/instance/network-interfaces/0/ip
-            method: GET
-            headers:
-              Metadata-Flavor: Google
-            return_content: true
-          register: gce_private_ip
-
-        - name: Collect Azure private IP
-          when: cloud_env == 'azure'
-          ansible.builtin.uri:
-            url: "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0?api-version=2021-12-13"
-            method: GET
-            headers:
-              Metadata: true
-            return_content: true
-          register: azure_private_ip
-
-    - name: Set instance facts
+    - name: Set instance IP facts
       ansible.builtin.set_fact:
-        ip_address: >-
-          {{
-            (aws_private_ip.content if cloud_env == 'aws' else
-             gce_private_ip.content if cloud_env == 'gce' else
-             (azure_private_ip.json[0].privateIpAddress if cloud_env == 'azure' else '')) | trim
-          }}
-        public_ip_address: "{{ aws_public_ip.content | default('') | trim }}"
+        ip_address: "{{ bind_address }}"
+        public_ip_address: "{{ ansible_host }}"
 
     - name: Copy Consul server config
       ansible.builtin.copy:
@@ -154,6 +71,15 @@
         name: consul.service
         enabled: true
         state: started
+
+    - name: Wait for Consul leader election
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8500/v1/status/leader
+        return_content: true
+      register: consul_leader
+      retries: 30
+      delay: 5
+      until: consul_leader.status == 200 and consul_leader.content != '""'
 
     - name: Generate Consul agent token
       ansible.builtin.command:
@@ -249,7 +175,7 @@
         - { regexp: '_NOMAD_NODE_NAME', replace: '{{ nomad_node_name }}' }
         - { regexp: '_NOMAD_SERVER_COUNT', replace: '{{ server_count }}' }
         - { regexp: '_NOMAD_ENCRYPTION_KEY', replace: '{{ nomad_encryption_key }}' }
-        - { regexp: '_CONSUL_IP_ADDRESS', replace: '{{ public_ip_address }}' }
+        - { regexp: '_CONSUL_IP_ADDRESS', replace: '{{ ansible_host }}' }
         - { regexp: '_CONSUL_AGENT_TOKEN', replace: '{{ consul_agent_token.SecretID }}' }
 
     - name: Enable and start Nomad
@@ -277,6 +203,12 @@
         path: /etc/hosts
         line: "127.0.0.1 {{ ansible_facts.hostname }}"
         state: present
+
+    - name: Ensure resolved config directory exists
+      ansible.builtin.file:
+        path: "{{ resolved_config_dir }}"
+        state: directory
+        mode: "0755"
 
     - name: Copy resolved config
       ansible.builtin.copy:
