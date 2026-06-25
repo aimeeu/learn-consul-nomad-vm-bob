@@ -6,9 +6,9 @@ resource "consul_config_entry" "proxy_defaults" {
 
   config_json = jsonencode({
     Config = {
-  		Protocol = "http"
-		},
-    "Mode": "transparent"
+      Protocol = "http"
+    },
+    "Mode" : "transparent"
   })
 }
 
@@ -17,8 +17,8 @@ resource "consul_config_entry" "database_default_tcp" {
   kind = "service-defaults"
 
   config_json = jsonencode({
-  	"Namespace": "default",
-  	"Protocol": "tcp"
+    "Namespace" : "default",
+    "Protocol" : "tcp"
   })
 }
 
@@ -27,8 +27,8 @@ resource "consul_config_entry" "nginx_default_http" {
   kind = "service-defaults"
 
   config_json = jsonencode({
-  	"Namespace": "default",
-  	"Protocol": "http"
+    "Namespace" : "default",
+    "Protocol" : "http"
   })
 }
 
@@ -37,7 +37,7 @@ resource "consul_config_entry" "public_api_default_http" {
   kind = "service-defaults"
 
   config_json = jsonencode({
-  	"Namespace": "default",
-  	"Protocol": "http"
+    "Namespace" : "default",
+    "Protocol" : "http"
   })
 }

@@ -9,16 +9,16 @@ Primary references:
 - [Shared configs, scripts, and jobs](shared/)
 
 ## Project Layout
-- aws/: Terraform and Packer for image build and infrastructure provisioning.
-- shared/conf/: Consul, Nomad, Vault, and consul-template agent configuration templates copied into VM images.
+- aws/: Terraform for infrastructure provisioning.
+- shared/conf/: Consul, Nomad, Vault, and consul-template agent configuration templates uploaded to VM instances by Ansible.
 - shared/data-scripts/: User-data scripts used by Terraform EC2 instances.
 - shared/jobs/: Nomad job specs and helper scripts for staged HashiCups deployments.
 - shared/scripts/: AMI setup and local environment cleanup helpers.
 
 ## Environment And Tooling
 Required CLIs:
-- packer
 - terraform
+- ansible
 - nomad
 - consul
 - aws
@@ -28,26 +28,36 @@ Required CLIs:
 Assume AWS credentials are already configured in the shell environment.
 
 ## Standard Workflow
-1. Build AMI from aws/:
+1. Edit variables.hcl from aws/:
    - cp variables.hcl.example variables.hcl
-   - edit region in variables.hcl
-   - packer init image.pkr.hcl
-   - packer build -var-file=variables.hcl image.pkr.hcl
-2. Update variables.hcl with AMI ID from packer output.
-3. Set CONSUL_TLS_SERVER_NAME before terraform apply:
+   - Set region and ami (base Ubuntu 22.04 AMI ID for the region; see variables.hcl.example for lookup command)
+2. Set CONSUL_TLS_SERVER_NAME before terraform apply:
    - export CONSUL_TLS_SERVER_NAME=consul.dc1.global
-4. Provision infrastructure from aws/:
+3. Provision server infrastructure from aws/ (phase 1 – no consul provider dependencies):
    - terraform init
    - terraform apply -var-file=variables.hcl
-5. Source generated environment file from aws/:
    - source ./datacenter.env
-6. Deploy Nomad jobs from shared/jobs/ in sequence:
+   Note: consul and nomad provider resources will fail on this first apply because
+   Consul is not yet running. This is expected. The important outputs (server
+   instances, cert files, inventory-servers.yml) are written successfully.
+4. Install packages and configure server nodes with Ansible (phase 1):
+   - ansible-playbook -i aws/inventory-servers.yml shared/ansible/site.yml
+   This installs Docker, Java, and HashiStack packages, uploads configuration
+   templates, then starts Consul and Nomad on the server nodes and bootstraps ACLs.
+5. Apply remaining Terraform resources from aws/ (phase 2 – consul provider now reachable):
+   - terraform apply -var-file=variables.hcl
+   This creates per-client ACL tokens, provisions client EC2 instances, writes
+   the full inventory.yml, and applies Consul service configuration entries.
+   - source ./datacenter.env
+6. Install packages and configure client nodes with Ansible (phase 2):
+   - ansible-playbook -i aws/inventory.yml shared/ansible/site.yml
+7. Deploy Nomad jobs from shared/jobs/ in sequence:
    - 01.hashicups.nomad.hcl
    - 02.hashicups.nomad.hcl
    - 03.hashicups.nomad.hcl
    - 04.api-gateway.config.sh, 04.intentions.consul.sh, 04.api-gateway.nomad.hcl, 04.hashicups.nomad.hcl
    - 05.autoscaler.config.sh, 05.autoscaler.nomad.hcl, 05.hashicups.nomad.hcl
-7. Cleanup:
+8. Cleanup:
    - nomad job stop -purge hashicups autoscaler
    - nomad job stop -purge --namespace ingress api-gateway
    - source ../shared/scripts/unset_env_variables.sh

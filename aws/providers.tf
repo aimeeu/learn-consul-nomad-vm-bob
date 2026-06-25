@@ -10,19 +10,19 @@ terraform {
       version = ">= 2"
     }
     tls = {
-      source = "hashicorp/tls"
+      source  = "hashicorp/tls"
       version = "4.0.5"
     }
     local = {
-      source = "hashicorp/local"
+      source  = "hashicorp/local"
       version = "2.5.1"
     }
     consul = {
-      source = "hashicorp/consul"
+      source  = "hashicorp/consul"
       version = "2.21.0"
     }
     nomad = {
-      source = "hashicorp/nomad"
+      source  = "hashicorp/nomad"
       version = "2.3.1"
     }
   }
@@ -33,11 +33,11 @@ provider "aws" {
 }
 
 provider "consul" {
-  datacenter      = var.datacenter
-  address         = "${aws_instance.server[0].public_ip}:8443"
-  token           = random_uuid.consul_mgmt_token.result
-  ca_pem          = tls_self_signed_cert.datacenter_ca.cert_pem
-  scheme          = "https"
+  datacenter = var.datacenter
+  address    = "${aws_instance.server[0].public_ip}:8443"
+  token      = random_uuid.consul_mgmt_token.result
+  ca_pem     = tls_self_signed_cert.datacenter_ca.cert_pem
+  scheme     = "https"
 }
 
 provider "nomad" {

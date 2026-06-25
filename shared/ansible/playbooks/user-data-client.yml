@@ -1,0 +1,175 @@
+---
+- name: Configure a Nomad and Consul client
+  hosts: consul_clients,consul_public_clients
+  become: true
+  gather_facts: true
+
+  vars:
+    config_dir: /ops/shared/conf
+    cni_plugin_version: v1.5.1
+    consul_cni_version: "1.5.1"
+
+  tasks:
+    - name: Upload TLS materials to Consul and Nomad directories
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: "{{ ca_cert_src }}", dest: "{{ consul_config_dir }}/consul-agent-ca.pem", mode: "0644" }
+        - { src: "{{ ca_cert_src }}", dest: "{{ nomad_config_dir }}/nomad-agent-ca.pem", mode: "0644" }
+        - { src: "{{ agent_cert_src }}", dest: "{{ nomad_config_dir }}/nomad-agent.pem", mode: "0644" }
+        - { src: "{{ agent_key_src }}", dest: "{{ nomad_config_dir }}/nomad-agent-key.pem", mode: "0400" }
+
+    - name: Read docker bridge IP
+      ansible.builtin.command:
+        argv: [sh, -lc, "ip -brief addr show docker0 | awk '{print $3}' | awk -F/ '{print $1}'"]
+      register: docker_bridge
+      changed_when: false
+
+    - name: Set instance IP fact
+      ansible.builtin.set_fact:
+        ip_address: "{{ bind_address }}"
+
+    - name: Detect system architecture
+      ansible.builtin.command:
+        argv: [uname, -m]
+      register: arch_cmd
+      changed_when: false
+
+    - name: Set CNI architecture
+      ansible.builtin.set_fact:
+        cni_arch: "{{ 'arm64' if arch_cmd.stdout | trim == 'aarch64' else 'amd64' }}"
+
+    - name: Ensure CNI bin directory exists
+      ansible.builtin.file:
+        path: /opt/cni/bin
+        state: directory
+        mode: "0755"
+
+    - name: Download CNI plugins
+      ansible.builtin.get_url:
+        url: "https://github.com/containernetworking/plugins/releases/download/{{ cni_plugin_version }}/cni-plugins-linux-{{ cni_arch }}-{{ cni_plugin_version }}.tgz"
+        dest: /tmp/cni-plugins.tgz
+        mode: "0644"
+
+    - name: Install CNI plugins
+      ansible.builtin.unarchive:
+        src: /tmp/cni-plugins.tgz
+        dest: /opt/cni/bin
+        remote_src: true
+
+    - name: Download Consul CNI plugin
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/consul-cni/{{ consul_cni_version }}/consul-cni_{{ consul_cni_version }}_linux_{{ cni_arch }}.zip"
+        dest: /tmp/consul-cni.zip
+        mode: "0644"
+
+    - name: Install Consul CNI plugin
+      ansible.builtin.unarchive:
+        src: /tmp/consul-cni.zip
+        dest: /opt/cni/bin
+        remote_src: true
+        exclude:
+          - LICENSE.txt
+
+    - name: Copy Consul client config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/agent-config-consul_client.hcl"
+        dest: "{{ consul_config_dir }}/consul.hcl"
+        mode: "0644"
+
+    - name: Render Consul client config
+      ansible.builtin.replace:
+        path: "{{ consul_config_dir }}/consul.hcl"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '_CONSUL_DATACENTER', replace: '{{ datacenter }}' }
+        - { regexp: '_CONSUL_DOMAIN', replace: '{{ domain }}' }
+        - { regexp: '_CONSUL_NODE_NAME', replace: '{{ consul_node_name }}' }
+        - { regexp: '_EXTRA_CONSUL_CLIENT_ADDR', replace: "{{ docker_bridge.stdout | trim }}" }
+        - { regexp: '_CONSUL_BIND_ADDR', replace: '{{ ip_address }}' }
+        - { regexp: '_CONSUL_RETRY_JOIN', replace: '{{ retry_join }}' }
+        - { regexp: '_CONSUL_ENCRYPTION_KEY', replace: '{{ consul_encryption_key }}' }
+        - { regexp: '_CONSUL_AGENT_TOKEN', replace: '{{ consul_agent_token }}' }
+        - { regexp: '_CONSUL_DEFAULT_TOKEN', replace: '{{ consul_default_token }}' }
+
+    - name: Enable and start Consul
+      ansible.builtin.systemd:
+        name: consul.service
+        enabled: true
+        state: started
+
+    - name: Copy Nomad client config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/agent-config-nomad_client.hcl"
+        dest: "{{ nomad_config_dir }}/nomad.hcl"
+        mode: "0644"
+
+    - name: Render Nomad client config
+      ansible.builtin.replace:
+        path: "{{ nomad_config_dir }}/nomad.hcl"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '_NOMAD_DATACENTER', replace: '{{ datacenter }}' }
+        - { regexp: '_NOMAD_DOMAIN', replace: '{{ domain }}' }
+        - { regexp: '_NOMAD_NODE_NAME', replace: '{{ nomad_node_name }}' }
+        - { regexp: '_NOMAD_AGENT_META', replace: '{{ nomad_agent_meta }}' }
+        - { regexp: '_CONSUL_AGENT_TOKEN', replace: '{{ nomad_agent_token }}' }
+
+    - name: Enable and start Nomad
+      ansible.builtin.systemd:
+        name: nomad.service
+        enabled: true
+        state: started
+
+    - name: Copy consul-template config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/agent-config-consul_template.hcl"
+        dest: "{{ consul_template_config_dir }}/consul-template.hcl"
+        mode: "0644"
+
+    - name: Copy consul-template systemd unit
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/systemd-service-consul_template.service"
+        dest: /etc/systemd/system/consul-template.service
+        mode: "0644"
+
+    - name: Ensure hostname is present in hosts file
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.1 {{ ansible_facts.hostname }}"
+        state: present
+
+    - name: Ensure resolved config directory exists
+      ansible.builtin.file:
+        path: "{{ resolved_config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy resolved config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/systemd-service-config-resolved.conf"
+        dest: "{{ resolved_config_dir }}/consul.conf"
+        mode: "0644"
+
+    - name: Render resolved config
+      ansible.builtin.replace:
+        path: "{{ resolved_config_dir }}/consul.conf"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '_CONSUL_DOMAIN', replace: '{{ domain }}' }
+        - { regexp: '_DOCKER_BRIDGE_IP_ADDRESS', replace: "{{ docker_bridge.stdout | trim }}" }
+
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted

@@ -1,0 +1,16 @@
+---
+# Main entry point for configuring all cluster nodes.
+#
+# Phase 1 (servers only – after first terraform apply):
+#   ansible-playbook -i aws/inventory-servers.yml shared/ansible/site.yml
+#
+# Phase 2 (full cluster – after second terraform apply):
+#   ansible-playbook -i aws/inventory.yml shared/ansible/site.yml
+- name: Install OS prerequisites and HashiStack packages
+  ansible.builtin.import_playbook: playbooks/setup.yml
+
+- name: Configure Consul and Nomad servers
+  ansible.builtin.import_playbook: playbooks/user-data-server.yml
+
+- name: Configure Consul and Nomad clients
+  ansible.builtin.import_playbook: playbooks/user-data-client.yml

@@ -40,17 +40,17 @@ resource "aws_security_group" "consul_nomad_ui_ingress" {
 
   # Nomad UI
   ingress {
-    from_port       = 4646
-    to_port         = 4646
-    protocol        = "tcp"
+    from_port   = 4646
+    to_port     = 4646
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   # Consul UI
   ingress {
-    from_port       = 8443
-    to_port         = 8443
-    protocol        = "tcp"
+    from_port   = 8443
+    to_port     = 8443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -151,7 +151,7 @@ resource "aws_iam_instance_profile" "instance_profile" {
 }
 
 resource "aws_iam_role" "instance_role" {
-  name_prefix = local.name
+  name_prefix        = local.name
   assume_role_policy = data.aws_iam_policy_document.instance_role.json
 }
 

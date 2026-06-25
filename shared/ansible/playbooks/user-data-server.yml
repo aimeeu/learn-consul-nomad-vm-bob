@@ -1,0 +1,245 @@
+---
+- name: Configure a Nomad and Consul server
+  hosts: consul_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    config_dir: /ops/shared/conf
+
+  tasks:
+    - name: Upload TLS materials to Consul and Nomad directories
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: "{{ ca_cert_src }}", dest: "{{ consul_config_dir }}/consul-agent-ca.pem", mode: "0644" }
+        - { src: "{{ agent_cert_src }}", dest: "{{ consul_config_dir }}/consul-agent.pem", mode: "0644" }
+        - { src: "{{ agent_key_src }}", dest: "{{ consul_config_dir }}/consul-agent-key.pem", mode: "0400" }
+        - { src: "{{ ca_cert_src }}", dest: "{{ nomad_config_dir }}/nomad-agent-ca.pem", mode: "0644" }
+        - { src: "{{ agent_cert_src }}", dest: "{{ nomad_config_dir }}/nomad-agent.pem", mode: "0644" }
+        - { src: "{{ agent_key_src }}", dest: "{{ nomad_config_dir }}/nomad-agent-key.pem", mode: "0400" }
+
+    - name: Read docker bridge IP
+      ansible.builtin.command:
+        argv: [sh, -lc, "ip -brief addr show docker0 | awk '{print $3}' | awk -F/ '{print $1}'"]
+      register: docker_bridge
+      changed_when: false
+
+    - name: Set instance IP facts
+      ansible.builtin.set_fact:
+        ip_address: "{{ bind_address }}"
+        public_ip_address: "{{ ansible_host }}"
+
+    - name: Copy Consul server config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/agent-config-consul_server.hcl"
+        dest: "{{ consul_config_dir }}/consul.hcl"
+        mode: "0644"
+
+    - name: Render Consul server config
+      ansible.builtin.replace:
+        path: "{{ consul_config_dir }}/consul.hcl"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '_CONSUL_DATACENTER', replace: '{{ datacenter }}' }
+        - { regexp: '_CONSUL_DOMAIN', replace: '{{ domain }}' }
+        - { regexp: '_CONSUL_NODE_NAME', replace: '{{ consul_node_name }}' }
+        - { regexp: '_CONSUL_SERVER_COUNT', replace: '{{ server_count }}' }
+        - { regexp: '_CONSUL_BIND_ADDR', replace: '{{ ip_address }}' }
+        - { regexp: '_CONSUL_RETRY_JOIN', replace: '{{ retry_join }}' }
+        - { regexp: '_CONSUL_ENCRYPTION_KEY', replace: '{{ consul_encryption_key }}' }
+
+    - name: Copy Consul bootstrap token config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/agent-config-consul_server_tokens_bootstrap.hcl"
+        dest: "{{ consul_config_dir }}/consul_tokens.hcl"
+        mode: "0644"
+
+    - name: Render bootstrap token config
+      ansible.builtin.replace:
+        path: "{{ consul_config_dir }}/consul_tokens.hcl"
+        regexp: _CONSUL_MANAGEMENT_TOKEN
+        replace: "{{ consul_management_token }}"
+
+    - name: Enable and start Consul
+      ansible.builtin.systemd:
+        name: consul.service
+        enabled: true
+        state: started
+
+    - name: Wait for Consul leader election
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8500/v1/status/leader
+        return_content: true
+      register: consul_leader
+      retries: 30
+      delay: 5
+      until: consul_leader.status == 200 and consul_leader.content != '""'
+
+    - name: Generate Consul agent token
+      ansible.builtin.command:
+        argv:
+          - consul
+          - acl
+          - token
+          - create
+          - -description=Server Agent token for {{ consul_node_name }}
+          - --format
+          - json
+          - -templated-policy=builtin/node
+          - -var
+          - "name:{{ consul_node_name }}"
+      environment:
+        CONSUL_HTTP_TOKEN: "{{ consul_management_token }}"
+      register: consul_agent_token_result
+      changed_when: true
+
+    - name: Set Consul agent token fact
+      ansible.builtin.set_fact:
+        consul_server_token: "{{ consul_agent_token_result.stdout | from_json }}"
+
+    - name: Apply Consul agent token
+      ansible.builtin.command:
+        argv: [consul, acl, set-agent-token, agent, "{{ consul_server_token.SecretID }}"]
+      environment:
+        CONSUL_HTTP_TOKEN: "{{ consul_management_token }}"
+      changed_when: true
+
+    - name: Generate Consul default token
+      ansible.builtin.command:
+        argv:
+          - consul
+          - acl
+          - token
+          - create
+          - -description=Server Default token for {{ consul_node_name }}
+          - --format
+          - json
+          - -templated-policy=builtin/dns
+      environment:
+        CONSUL_HTTP_TOKEN: "{{ consul_management_token }}"
+      register: consul_dns_token_result
+      changed_when: true
+
+    - name: Set Consul DNS token fact
+      ansible.builtin.set_fact:
+        consul_dns_token: "{{ consul_dns_token_result.stdout | from_json }}"
+
+    - name: Apply Consul default token
+      ansible.builtin.command:
+        argv: [consul, acl, set-agent-token, default, "{{ consul_dns_token.SecretID }}"]
+      environment:
+        CONSUL_HTTP_TOKEN: "{{ consul_management_token }}"
+      changed_when: true
+
+    - name: Generate Nomad server Consul token
+      ansible.builtin.command:
+        argv:
+          - consul
+          - acl
+          - token
+          - create
+          - -description=Nomad server auto-join token for {{ consul_node_name }}
+          - --format
+          - json
+          - -templated-policy=builtin/nomad-server
+      environment:
+        CONSUL_HTTP_TOKEN: "{{ consul_management_token }}"
+      register: nomad_server_consul_token_result
+      changed_when: true
+
+    - name: Set Nomad server Consul token fact
+      ansible.builtin.set_fact:
+        consul_agent_token: "{{ nomad_server_consul_token_result.stdout | from_json }}"
+
+    - name: Copy Nomad server config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/agent-config-nomad_server.hcl"
+        dest: "{{ nomad_config_dir }}/nomad.hcl"
+        mode: "0644"
+
+    - name: Render Nomad server config
+      ansible.builtin.replace:
+        path: "{{ nomad_config_dir }}/nomad.hcl"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '_NOMAD_DATACENTER', replace: '{{ datacenter }}' }
+        - { regexp: '_NOMAD_DOMAIN', replace: '{{ domain }}' }
+        - { regexp: '_NOMAD_NODE_NAME', replace: '{{ nomad_node_name }}' }
+        - { regexp: '_NOMAD_SERVER_COUNT', replace: '{{ server_count }}' }
+        - { regexp: '_NOMAD_ENCRYPTION_KEY', replace: '{{ nomad_encryption_key }}' }
+        - { regexp: '_CONSUL_IP_ADDRESS', replace: '{{ ansible_host }}' }
+        - { regexp: '_CONSUL_AGENT_TOKEN', replace: '{{ consul_agent_token.SecretID }}' }
+
+    - name: Enable and start Nomad
+      ansible.builtin.systemd:
+        name: nomad.service
+        enabled: true
+        state: started
+
+    - name: Copy consul-template config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/agent-config-consul_template.hcl"
+        dest: "{{ consul_template_config_dir }}/consul-template.hcl"
+        mode: "0644"
+
+    - name: Copy consul-template systemd unit
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/systemd-service-consul_template.service"
+        dest: /etc/systemd/system/consul-template.service
+        mode: "0644"
+
+    - name: Add hostname to hosts file
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.1 {{ ansible_facts.hostname }}"
+        state: present
+
+    - name: Ensure resolved config directory exists
+      ansible.builtin.file:
+        path: "{{ resolved_config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy resolved config
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ config_dir }}/systemd-service-config-resolved.conf"
+        dest: "{{ resolved_config_dir }}/consul.conf"
+        mode: "0644"
+
+    - name: Render resolved config
+      ansible.builtin.replace:
+        path: "{{ resolved_config_dir }}/consul.conf"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: '_CONSUL_DOMAIN', replace: '{{ domain }}' }
+        - { regexp: '_DOCKER_BRIDGE_IP_ADDRESS', replace: "{{ docker_bridge.stdout | trim }}" }
+
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+
+    - name: Bootstrap Nomad
+      ansible.builtin.command:
+        argv: [nomad, acl, bootstrap, -]
+        stdin: "{{ nomad_management_token }}"
+      environment:
+        NOMAD_ADDR: https://localhost:4646
+        NOMAD_CACERT: "{{ nomad_config_dir }}/nomad-agent-ca.pem"
+      register: nomad_bootstrap
+      retries: 12
+      delay: 5
+      until: nomad_bootstrap.rc == 0 or 'No cluster leader' not in (nomad_bootstrap.stderr | default('') ~ nomad_bootstrap.stdout | default(''))
+      failed_when: nomad_bootstrap.rc != 0 and 'already bootstrapped' not in (nomad_bootstrap.stderr | default('') ~ nomad_bootstrap.stdout | default('')) and 'No cluster leader' not in (nomad_bootstrap.stderr | default('') ~ nomad_bootstrap.stdout | default(''))

@@ -47,12 +47,12 @@ resource "tls_self_signed_cert" "datacenter_ca" {
   private_key_pem = tls_private_key.datacenter_ca.private_key_pem
 
   subject {
-    country = "US"
-    province = "CA"
-    locality = "San Francisco/street=101 Second Street/postalCode=9410"
-    organization = "HashiCorp Inc."
+    country             = "US"
+    province            = "CA"
+    locality            = "San Francisco/street=101 Second Street/postalCode=9410"
+    organization        = "HashiCorp Inc."
     organizational_unit = "Runtime"
-    common_name  = "ca.${var.datacenter}.${var.domain}"
+    common_name         = "ca.${var.datacenter}.${var.domain}"
   }
 
   validity_period_hours = 8760
@@ -73,23 +73,23 @@ resource "local_file" "ca_cert" {
 
 # Server Keys
 resource "tls_private_key" "server_key" {
-  count       = "${var.server_count}"
+  count       = var.server_count
   algorithm   = "ECDSA"
   ecdsa_curve = "P384"
 }
 
 # Server CSR
 resource "tls_cert_request" "server_csr" {
-  count = "${var.server_count}"
-  private_key_pem = "${element(tls_private_key.server_key.*.private_key_pem, count.index)}"
+  count           = var.server_count
+  private_key_pem = element(tls_private_key.server_key.*.private_key_pem, count.index)
 
   subject {
-    country = "US"
-    province = "CA"
-    locality = "San Francisco/street=101 Second Street/postalCode=9410"
-    organization = "HashiCorp Inc."
+    country             = "US"
+    province            = "CA"
+    locality            = "San Francisco/street=101 Second Street/postalCode=9410"
+    organization        = "HashiCorp Inc."
     organizational_unit = "Runtime"
-    common_name  = "server-${count.index}.${var.datacenter}.${var.domain}"
+    common_name         = "server-${count.index}.${var.datacenter}.${var.domain}"
   }
 
   dns_names = [
@@ -111,11 +111,11 @@ resource "tls_cert_request" "server_csr" {
 
 # Server Certs
 resource "tls_locally_signed_cert" "server_cert" {
-  count = "${var.server_count}"
-  cert_request_pem = "${element(tls_cert_request.server_csr.*.cert_request_pem, count.index)}"
+  count            = var.server_count
+  cert_request_pem = element(tls_cert_request.server_csr.*.cert_request_pem, count.index)
 
-  ca_private_key_pem = "${tls_private_key.datacenter_ca.private_key_pem}"
-  ca_cert_pem = "${tls_self_signed_cert.datacenter_ca.cert_pem}"
+  ca_private_key_pem = tls_private_key.datacenter_ca.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.datacenter_ca.cert_pem
 
   validity_period_hours = 87600 # 10 years
 
@@ -129,23 +129,23 @@ resource "tls_locally_signed_cert" "server_cert" {
 
 # Client Keys
 resource "tls_private_key" "client_key" {
-  count       = "${var.client_count}"
+  count       = var.client_count
   algorithm   = "ECDSA"
   ecdsa_curve = "P384"
 }
 
 # Client CSR
 resource "tls_cert_request" "client_csr" {
-  count = "${var.client_count}"
-  private_key_pem = "${element(tls_private_key.client_key.*.private_key_pem, count.index)}"
+  count           = var.client_count
+  private_key_pem = element(tls_private_key.client_key.*.private_key_pem, count.index)
 
   subject {
-    country = "US"
-    province = "CA"
-    locality = "San Francisco/street=101 Second Street/postalCode=9410"
-    organization = "HashiCorp Inc."
+    country             = "US"
+    province            = "CA"
+    locality            = "San Francisco/street=101 Second Street/postalCode=9410"
+    organization        = "HashiCorp Inc."
     organizational_unit = "Runtime"
-    common_name  = "client-${count.index}.${var.datacenter}.${var.domain}"
+    common_name         = "client-${count.index}.${var.datacenter}.${var.domain}"
   }
 
   dns_names = [
@@ -164,11 +164,11 @@ resource "tls_cert_request" "client_csr" {
 
 # Client Certs
 resource "tls_locally_signed_cert" "client_cert" {
-  count = "${var.client_count}"
-  cert_request_pem = "${element(tls_cert_request.client_csr.*.cert_request_pem, count.index)}"
+  count            = var.client_count
+  cert_request_pem = element(tls_cert_request.client_csr.*.cert_request_pem, count.index)
 
-  ca_private_key_pem = "${tls_private_key.datacenter_ca.private_key_pem}"
-  ca_cert_pem = "${tls_self_signed_cert.datacenter_ca.cert_pem}"
+  ca_private_key_pem = tls_private_key.datacenter_ca.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.datacenter_ca.cert_pem
 
   validity_period_hours = 87600 # 10 years
 
@@ -182,23 +182,23 @@ resource "tls_locally_signed_cert" "client_cert" {
 
 # Public Client Keys
 resource "tls_private_key" "public_client_key" {
-  count       = "${var.public_client_count}"
+  count       = var.public_client_count
   algorithm   = "ECDSA"
   ecdsa_curve = "P384"
 }
 
 # Public Client CSR
 resource "tls_cert_request" "public_client_csr" {
-  count = "${var.public_client_count}"
-  private_key_pem = "${element(tls_private_key.public_client_key.*.private_key_pem, count.index)}"
+  count           = var.public_client_count
+  private_key_pem = element(tls_private_key.public_client_key.*.private_key_pem, count.index)
 
   subject {
-    country = "US"
-    province = "CA"
-    locality = "San Francisco/street=101 Second Street/postalCode=9410"
-    organization = "HashiCorp Inc."
+    country             = "US"
+    province            = "CA"
+    locality            = "San Francisco/street=101 Second Street/postalCode=9410"
+    organization        = "HashiCorp Inc."
     organizational_unit = "Runtime"
-    common_name  = "client-${count.index}.${var.datacenter}.${var.domain}"
+    common_name         = "client-${count.index}.${var.datacenter}.${var.domain}"
   }
 
   dns_names = [
@@ -217,11 +217,11 @@ resource "tls_cert_request" "public_client_csr" {
 
 # Public Client Certs
 resource "tls_locally_signed_cert" "public_client_cert" {
-  count = "${var.public_client_count}"
-  cert_request_pem = "${element(tls_cert_request.public_client_csr.*.cert_request_pem, count.index)}"
+  count            = var.public_client_count
+  cert_request_pem = element(tls_cert_request.public_client_csr.*.cert_request_pem, count.index)
 
-  ca_private_key_pem = "${tls_private_key.datacenter_ca.private_key_pem}"
-  ca_cert_pem = "${tls_self_signed_cert.datacenter_ca.cert_pem}"
+  ca_private_key_pem = tls_private_key.datacenter_ca.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.datacenter_ca.cert_pem
 
   validity_period_hours = 87600 # 10 years
 
@@ -271,96 +271,96 @@ resource "nomad_acl_token" "nomad-user-token" {
   type     = "client"
   policies = ["nomad-user"]
   global   = true
-} 
+}
 
 # Consul client agent token
-resource consul_acl_token "consul-client-agent-token" {
-  count   = var.client_count
+resource "consul_acl_token" "consul-client-agent-token" {
+  count       = var.client_count
   description = "Consul client ${count.index} agent token"
   templated_policies {
-      template_name = "builtin/node"
-      template_variables {
-        name = "consul-client-${count.index}"
-      }
+    template_name = "builtin/node"
+    template_variables {
+      name = "consul-client-${count.index}"
+    }
   }
 }
 
 data "consul_acl_token_secret_id" "consul-client-agent-token" {
-    count   = var.client_count
-    accessor_id = "${consul_acl_token.consul-client-agent-token[count.index].id}"
+  count       = var.client_count
+  accessor_id = consul_acl_token.consul-client-agent-token[count.index].id
 }
 
 # Consul client default token
-resource consul_acl_token "consul-client-default-token" {
-  count   = var.client_count
+resource "consul_acl_token" "consul-client-default-token" {
+  count       = var.client_count
   description = "Consul client ${count.index} default token"
   templated_policies {
-      template_name = "builtin/dns"
+    template_name = "builtin/dns"
   }
 }
 
 data "consul_acl_token_secret_id" "consul-client-default-token" {
-    count   = var.client_count
-    accessor_id = "${consul_acl_token.consul-client-default-token[count.index].id}"
+  count       = var.client_count
+  accessor_id = consul_acl_token.consul-client-default-token[count.index].id
 }
 
 # Nomad client Consul token
-resource consul_acl_token "nomad-client-consul-token" {
-  count   = var.client_count
+resource "consul_acl_token" "nomad-client-consul-token" {
+  count       = var.client_count
   description = "Nomad client ${count.index} Consul token"
   templated_policies {
-      template_name = "builtin/nomad-client"
+    template_name = "builtin/nomad-client"
   }
 }
 
 data "consul_acl_token_secret_id" "nomad-client-consul-token" {
-    count   = var.client_count
-    accessor_id = "${consul_acl_token.nomad-client-consul-token[count.index].id}"
+  count       = var.client_count
+  accessor_id = consul_acl_token.nomad-client-consul-token[count.index].id
 }
 
 # Consul public client agent token
-resource consul_acl_token "consul-public-client-agent-token" {
-  count   = var.public_client_count
+resource "consul_acl_token" "consul-public-client-agent-token" {
+  count       = var.public_client_count
   description = "Consul public client ${count.index} agent token"
   templated_policies {
-      template_name = "builtin/node"
-      template_variables {
-        name = "consul-public-client-${count.index}"
-      }
+    template_name = "builtin/node"
+    template_variables {
+      name = "consul-public-client-${count.index}"
+    }
   }
 }
 
 data "consul_acl_token_secret_id" "consul-public-client-agent-token" {
-    count   = var.public_client_count
-    accessor_id = "${consul_acl_token.consul-public-client-agent-token[count.index].id}"
+  count       = var.public_client_count
+  accessor_id = consul_acl_token.consul-public-client-agent-token[count.index].id
 }
 
 # Consul public client default token
-resource consul_acl_token "consul-public-client-default-token" {
-  count   = var.public_client_count
+resource "consul_acl_token" "consul-public-client-default-token" {
+  count       = var.public_client_count
   description = "Consul public client ${count.index} default token"
   templated_policies {
-      template_name = "builtin/dns"
+    template_name = "builtin/dns"
   }
 }
 
 data "consul_acl_token_secret_id" "consul-public-client-default-token" {
-    count   = var.public_client_count
-    accessor_id = "${consul_acl_token.consul-public-client-default-token[count.index].id}"
+  count       = var.public_client_count
+  accessor_id = consul_acl_token.consul-public-client-default-token[count.index].id
 }
 
 # Nomad public client Consul token
-resource consul_acl_token "nomad-public-client-consul-token" {
-  count   = var.public_client_count
+resource "consul_acl_token" "nomad-public-client-consul-token" {
+  count       = var.public_client_count
   description = "Nomad public client ${count.index} Consul token"
   templated_policies {
-      template_name = "builtin/nomad-client"
+    template_name = "builtin/nomad-client"
   }
 }
 
 data "consul_acl_token_secret_id" "nomad-public-client-consul-token" {
-    count   = var.public_client_count
-    accessor_id = "${consul_acl_token.nomad-public-client-consul-token[count.index].id}"
+  count       = var.public_client_count
+  accessor_id = consul_acl_token.nomad-public-client-consul-token[count.index].id
 }
 
 #-------------------------------------------------------------------------------

@@ -1,0 +1,50 @@
+---
+- name: Configure Nomad autoscaler ACL policy
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+
+  vars:
+    scale_policy_file: /tmp/nomad-acl-policy-scale.json
+
+  tasks:
+    - name: Delete autoscaler ACL policy
+      ansible.builtin.command:
+        argv: [nomad, acl, policy, delete, autoscaler]
+      failed_when: false
+      changed_when: false
+
+    - name: End play when clean_only is set
+      ansible.builtin.meta: end_play
+      when: clean_only | default(false) | bool
+
+    - name: Create ACL policy config
+      ansible.builtin.copy:
+        dest: "{{ scale_policy_file }}"
+        mode: "0600"
+        content: |
+          namespace "default" {
+            policy = "scale"
+          }
+
+          namespace "default" {
+            capabilities = ["read-job"]
+          }
+
+          operator {
+            policy = "read"
+          }
+
+          namespace "default" {
+            variables {
+              path "nomad-autoscaler/lock" {
+                capabilities = ["write"]
+              }
+            }
+          }
+
+    - name: Apply ACL policy
+      ansible.builtin.command:
+        argv: [nomad, acl, policy, apply, -namespace, default, -job, autoscaler, autoscaler, "{{ scale_policy_file }}"]
+      changed_when: true
